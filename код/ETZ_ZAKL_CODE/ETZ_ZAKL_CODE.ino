@@ -1,5 +1,5 @@
 #include <GyverMenu.h>
-#define GS_NO_ACCEL
+// #define GS_NO_ACCEL
 #include <ServoSmooth.h>
 #include <GyverStepper2.h>
 #include <GyverPlanner2.h>
@@ -7,8 +7,14 @@
 #include <EncButton.h>
 #include <GyverOS.h>
 
+struct Point {
+  double x;
+  double y;
+};
+
 GyverOS<20> OS;
-#define speed 5000
+#define draw_path(pts, f) _draw_path_internal(pts, sizeof(pts) / sizeof(Point), f)
+#define speed 1000
 #define work_led 47
 #define line analogRead(A0)
 ServoSmooth z;
@@ -20,6 +26,7 @@ GyverOLED<SSD1306_128x64, OLED_BUFFER> oled;
 EncButton enc(18, 19, 2, INPUT_PULLUP);
 GyverMenu menu(30, 8);
 GyverMenu smenu(30, 8);
+int xp, yp;
 
 void up() {
   planner.stop();
@@ -176,8 +183,74 @@ double cm_x(double n) {
   return 10 * n * (3200.0 / (44.0 * M_PI));
 }
 
+void reset_x(){
+  int32_t point[3];
+  point[0] = 0;
+  point[1] = planner.getCurrent(1);
+  point[2] = 0;
+  planner.setCurrent(point);
+  xp = 0;
+}
+
+void set_speed_x(int s){
+  planner.setSpeed(0, s);
+  planner.setSpeed(2, s);
+}
+
+void stop_x(){
+  planner.setSpeed(0, 0);
+  planner.setSpeed(2, 0);
+}
+
+double go_line_x(int s){
+  set_speed_x(s);
+  while (line > 500){
+    handler();
+  }
+  long t = millis();
+  while (line < 500){
+    handler();
+  }
+  stop_x();
+  return millis() - t;
+}
+
 double cm_y(double n) {
   return n * 3200.0 / 8.0 * 10.0;
+}
+
+void reset_y(){
+  int32_t point[3];
+  point[0] = planner.getCurrent(0);
+  point[1] = 0;
+  point[2] = planner.getCurrent(2);
+  planner.setCurrent(point);
+  yp = 0;
+}
+
+void set_speed_y(int s){
+  planner.setSpeed(1, s);
+}
+
+void stop_y(){
+  planner.setSpeed(1, 0);
+}
+
+double go_line_y(int s){
+  set_speed_y(s);
+  while (line > 500){
+    handler();
+  }
+  long t = millis();
+  while (line < 500){
+    handler();
+  }
+  stop_y();
+  return millis() - t;
+}
+
+void reset(){
+  planner.reset();
 }
 
 void handler() {
@@ -215,11 +288,9 @@ void handler() {
   }
 }
 
-int xp, yp;
-
-void add(double x, double y) {
+bool add(double x, double y) {
   if (xp == x && yp == y){
-    return;
+    return false;
   }
   xp = x;
   yp = y;
@@ -229,6 +300,7 @@ void add(double x, double y) {
   point[2] = (int32_t)cm_x(x);
 
   planner.addTarget(point, 3, ABSOLUTE);
+  return true;
 }
 
 void wait() {
@@ -241,11 +313,11 @@ void wait() {
 }
 
 void move(double x, double y) {
-  add(x, y);
+  if (!add(x, y)) return;
   wait();
 }
 
-void draw_line(int x0, int y0, int x, int y, bool f = 0){
+void draw_line(double x0, double y0, double x, double y, bool f = 0){
   if (!f){
     down();
   }
@@ -257,36 +329,54 @@ void draw_line(int x0, int y0, int x, int y, bool f = 0){
   move(x, y);
 }
 
-void draw_circle(int cx, int cy, int r){
+void draw_circle(double cx, double cy, double r){
   double segments = 80.0;
   up();
   move(cx + r, cy);
   down();
   double step = 2 * M_PI / segments;
-  for (int i = 0; i < segments; i++){
+  for (int i = 0; i <= segments; i++){
     add(cx + r * cos(i * step), cy + r * sin(i * step));
   }
-  for (int i = 0; i < segments - 1; i++){
+  for (int i = 0; i < segments; i++){
     wait();
   }
   up();
 }
 
-long t = millis() + 100;
+void draw_polygon(int cx, int cy, int r, int n){
+  up();
+  move(cx + r, cy);
+  down();
+  double step = 2 * M_PI / n;
+  for (int i = 0; i <= n; i++){
+    add(cx + r * cos(i * step), cy + r * sin(i * step));
+  }
+  for (int i = 0; i < n; i++){
+    wait();
+  }
+  up();
+}
+
+void _draw_path_internal(Point* pts, int size, bool zam) {
+  up();
+  move(pts[0].x, pts[0].y);
+  down();
+  for (int i = 1; i < size; i++) {
+    move(pts[i].x, pts[i].y);
+  }
+  if (zam){
+    move(pts[0].x, pts[0].y);
+  }
+  up();
+}
 
 void loop() {
   OS.tick();
 }
 
 void f_1() {
-  draw_line(0, 0, 10, 0);
-  draw_line(10, 0, 10, 10);
-  draw_line(10, 10, 0, 10);
-  draw_line(0, 10, 0, 0);
-  draw_line(0, 0, 10, 10);
-  draw_line(10, 0, 0, 10, 1);
-  draw_circle(5, 5, 5);
-  draw_circle(5, 5, 5 * sqrt(2));
+
 }
 
 void f_2() {
