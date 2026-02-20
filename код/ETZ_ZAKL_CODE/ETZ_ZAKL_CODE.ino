@@ -63,8 +63,8 @@ void release() {
 double px = 0, py = 0;
 
 bool add(double x, double y, int s = speed) {
-  planner.brake();         // останавливаем планировщик (status = 0)
-  planner.setMaxSpeed(s);  // теперь setMaxSpeed() применит скорость сразу!
+  planner.brake();
+  planner.setMaxSpeed(s);
   planner.start();
   if (xp == x && yp == y) {
     return false;
