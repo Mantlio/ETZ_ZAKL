@@ -7,11 +7,6 @@
 #include <EncButton.h>
 #include <GyverOS.h>
 
-struct Point {
-  double x;
-  double y;
-};
-
 GyverOS<20> OS;
 #define draw_path(pts, f) _draw_path_internal(pts, sizeof(pts) / sizeof(Point), f)
 #define speed 1000
@@ -26,6 +21,16 @@ GyverOLED<SSD1306_128x64, OLED_BUFFER> oled;
 EncButton enc(18, 19, 2, INPUT_PULLUP);
 GyverMenu menu(30, 8);
 GyverMenu smenu(30, 8);
+GyverMenu tmenu(30, 8);
+
+struct Point {
+  double x;
+  double y;
+  int s = speed;
+  Point(double nx, double ny, int ns = speed)
+    : x(nx), y(ny), s(ns) {}
+};
+
 int xp, yp;
 
 void up() {
@@ -55,13 +60,47 @@ void release() {
   planner.start();
 }
 
+double px = 0, py = 0;
+
+bool add(double x, double y, int s = speed) {
+  planner.brake();         // останавливаем планировщик (status = 0)
+  planner.setMaxSpeed(s);  // теперь setMaxSpeed() применит скорость сразу!
+  planner.start();
+  if (xp == x && yp == y) {
+    return false;
+  }
+  xp = x;
+  yp = y;
+  int32_t point[3];
+  point[0] = (int32_t)cm_x(x);
+  point[1] = (int32_t)cm_y(y);
+  point[2] = (int32_t)cm_x(x);
+
+  planner.addTarget(point, 3, ABSOLUTE);
+  return true;
+}
+
+void wait() {
+  while (planner.getStatus() == 1) {
+    handler();
+  }
+  while (planner.getStatus() == 2) {
+    handler();
+  }
+}
+
+void move(double x, double y, int s = speed) {
+  if (!add(x, y, s)) return;
+  wait();
+}
+
 void setup() {
   pinMode(A0, INPUT);
   stepper_l.reverse(true);
   planner.addStepper(0, stepper_r);
   planner.addStepper(2, stepper_l);
   planner.addStepper(1, stepper_y);
-  planner.setMaxSpeed(speed);
+  //planner.setMaxSpeed(speed);
   int start[3] = { 0, 0, 0 };
   planner.addTarget(start, 3);
   planner.setAcceleration(0);
@@ -73,7 +112,6 @@ void setup() {
   z.setSpeed(100);
   pinMode(work_led, OUTPUT);
   release();
-  planner.setMaxSpeed(2500);
   menu.onPrint([](const char* str, size_t len) {
     if (str) oled.Print::write(str, len);
     else oled.update();
@@ -171,19 +209,60 @@ void setup() {
     });
   });
 
+  tmenu.onPrint([](const char* str, size_t len) {
+    if (str) oled.Print::write(str, len);
+    else oled.update();
+  });
+  tmenu.onCursor([](uint8_t row, bool chosen, bool active) -> uint8_t {
+    oled.setCursor(0, row);
+    oled.invertText(chosen);
+    return 0;
+  });
+
+  tmenu.onBuild([](gm::Builder& b) {
+    b.Button("Проезд на 10 см вперед x", []() {
+      px += 10;
+      move(px, py);
+    });
+    b.Button("Проезд на 5 см вперед y", []() {
+      py += 5;
+      move(px, py, 25000);
+    });
+    b.Button("Проезд на 10 см назад x", []() {
+      px -= 10;
+      move(px, py);
+    });
+    b.Button("Проезд на 5 см назад y", []() {
+      py -= 5;
+      move(px, py, 25000);
+    });
+    b.Button("вернуть", []() {
+      py = 0;
+      px = 0;
+      move(px, py, 10000);
+    });
+  });
+
   menu.setFastCursor(false);
   smenu.setFastCursor(false);
+  tmenu.setFastCursor(false);
   menu.refresh();
   OS.attach(0, handler);
 }
 
-static bool settings = 0;
+static int settings = 0;
+
+void refresh() {
+  if (settings == 0) menu.refresh();
+  if (settings == 1) smenu.refresh();
+  if (settings == 2) tmenu.refresh();
+}
 
 double cm_x(double n) {
   return 10 * n * (3200.0 / (44.0 * M_PI));
 }
 
-void reset_x(){
+void reset_x() {
   int32_t point[3];
   point[0] = 0;
   point[1] = planner.getCurrent(1);
@@ -192,23 +271,23 @@ void reset_x(){
   xp = 0;
 }
 
-void set_speed_x(int s){
+void set_speed_x(int s) {
   planner.setSpeed(0, s);
   planner.setSpeed(2, s);
 }
 
-void stop_x(){
+void stop_x() {
   planner.setSpeed(0, 0);
   planner.setSpeed(2, 0);
 }
 
-double go_line_x(int s){
+double go_line_x(int s) {
   set_speed_x(s);
-  while (line > 500){
+  while (line > 500) {
     handler();
   }
   long t = millis();
-  while (line < 500){
+  while (line < 500) {
     handler();
   }
   stop_x();
@@ -219,7 +298,7 @@ double cm_y(double n) {
   return n * 3200.0 / 8.0 * 10.0;
 }
 
-void reset_y(){
+void reset_y() {
   int32_t point[3];
   point[0] = planner.getCurrent(0);
   point[1] = 0;
@@ -228,28 +307,28 @@ void reset_y(){
   yp = 0;
 }
 
-void set_speed_y(int s){
+void set_speed_y(int s) {
   planner.setSpeed(1, s);
 }
 
-void stop_y(){
+void stop_y() {
   planner.setSpeed(1, 0);
 }
 
-double go_line_y(int s){
+double go_line_y(int s) {
   set_speed_y(s);
-  while (line > 500){
+  while (line > 500) {
     handler();
   }
   long t = millis();
-  while (line < 500){
+  while (line < 500) {
     handler();
   }
   stop_y();
   return millis() - t;
 }
 
-void reset(){
+void reset() {
   planner.reset();
 }
 
@@ -261,67 +340,34 @@ void handler() {
   stepper_y.tick();
   planner.tick();
   if (enc.right()) {
-    if (settings) {
-      smenu.down();
-    } else {
-      menu.down();
-    }
+    if (settings == 0) menu.down();
+    if (settings == 1) smenu.down();
+    if (settings == 2) tmenu.down();
   } else if (enc.left()) {
-    if (settings) {
-      smenu.up();
-    } else {
-      menu.up();
-    }
+    if (settings == 0) menu.up();
+    if (settings == 1) smenu.up();
+    if (settings == 2) tmenu.up();
   } else if (enc.hasClicks(1)) {
-    if (settings) {
-      smenu.set();
-    } else {
-      menu.set();
-    }
+    if (settings == 0) menu.set();
+    if (settings == 1) smenu.set();
+    if (settings == 2) tmenu.set();
   } else if (enc.hasClicks(2)) {
-    settings = !settings;
-    if (settings) {
-      smenu.refresh();
-    } else {
-      menu.refresh();
-    }
+    if (settings == 0) settings = 1;
+    else if (settings == 1) settings = 0;
+    else if (settings == 2) settings = 1;
+    refresh();
+  } else if (enc.hasClicks(3)) {
+    if (settings == 0) settings = 2;
+    else if (settings == 1) settings = 2;
+    else if (settings == 2) settings = 0;
+    refresh();
   }
 }
 
-bool add(double x, double y) {
-  if (xp == x && yp == y){
-    return false;
-  }
-  xp = x;
-  yp = y;
-  int32_t point[3];
-  point[0] = (int32_t)cm_x(x);
-  point[1] = (int32_t)cm_y(y);
-  point[2] = (int32_t)cm_x(x);
-
-  planner.addTarget(point, 3, ABSOLUTE);
-  return true;
-}
-
-void wait() {
-  while (planner.getStatus() == 1) {
-    handler();
-  }
-  while (planner.getStatus() == 2) {
-    handler();
-  }
-}
-
-void move(double x, double y) {
-  if (!add(x, y)) return;
-  wait();
-}
-
-void draw_line(double x0, double y0, double x, double y, bool f = 0){
-  if (!f){
+void draw_line(double x0, double y0, double x, double y, bool f = 0) {
+  if (!f) {
     down();
-  }
-  else{
+  } else {
     up();
     move(x0, y0);
     down();
@@ -329,30 +375,30 @@ void draw_line(double x0, double y0, double x, double y, bool f = 0){
   move(x, y);
 }
 
-void draw_circle(double cx, double cy, double r){
+void draw_circle(double cx, double cy, double r) {
   double segments = 80.0;
   up();
   move(cx + r, cy);
   down();
   double step = 2 * M_PI / segments;
-  for (int i = 0; i <= segments; i++){
+  for (int i = 0; i <= segments; i++) {
     add(cx + r * cos(i * step), cy + r * sin(i * step));
   }
-  for (int i = 0; i < segments; i++){
+  for (int i = 0; i < segments; i++) {
     wait();
   }
   up();
 }
 
-void draw_polygon(int cx, int cy, int r, int n){
+void draw_polygon(int cx, int cy, int r, int n) {
   up();
   move(cx + r, cy);
   down();
   double step = 2 * M_PI / n;
-  for (int i = 0; i <= n; i++){
+  for (int i = 0; i <= n; i++) {
     add(cx + r * cos(i * step), cy + r * sin(i * step));
   }
-  for (int i = 0; i < n; i++){
+  for (int i = 0; i < n; i++) {
     wait();
   }
   up();
@@ -360,13 +406,13 @@ void draw_polygon(int cx, int cy, int r, int n){
 
 void _draw_path_internal(Point* pts, int size, bool zam) {
   up();
-  move(pts[0].x, pts[0].y);
+  move(pts[0].x, pts[0].y, pts[0].s);
   down();
   for (int i = 1; i < size; i++) {
-    move(pts[i].x, pts[i].y);
+    move(pts[i].x, pts[i].y, pts[i].s);
   }
-  if (zam){
-    move(pts[0].x, pts[0].y);
+  if (zam) {
+    move(pts[0].x, pts[0].y, pts[0].s);
   }
   up();
 }
@@ -376,10 +422,14 @@ void loop() {
 }
 
 void f_1() {
-
+  Point path[4] = { { 0, 0 }, { 0, 10, 26000 }, { 10, 10 }, { 10, 0, 26000 } };
+  draw_path(path, 1);
 }
 
 void f_2() {
+  Point path[3] = { { 15, 0 }, { 15, 15, 26000 }, { 30, 15 } };
+  draw_path(path, 0);
+  move(0, 0, 15000);
 }
 
 void f_3() {
