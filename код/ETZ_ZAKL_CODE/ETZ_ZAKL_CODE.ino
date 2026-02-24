@@ -1,5 +1,6 @@
 #include <GyverMenu.h>
 // #define GS_NO_ACCEL
+#define GS_FAST_PROFILE 10
 #include <ServoSmooth.h>
 #include <GyverStepper2.h>
 #include <GyverPlanner2.h>
@@ -19,9 +20,11 @@ GStepper2< STEPPER2WIRE> stepper_l(200, 40, 39, 38);
 GPlanner2< STEPPER2WIRE, 3, 100> planner;
 GyverOLED<SSD1306_128x64, OLED_BUFFER> oled;
 EncButton enc(18, 19, 2, INPUT_PULLUP);
-GyverMenu menu(30, 8);
-GyverMenu smenu(30, 8);
-GyverMenu tmenu(30, 8);
+GyverMenu menu(20, 8);
+GyverMenu smenu(20, 8);
+GyverMenu tmenu(20, 8);
+
+double start_x = 0;
 
 struct Point {
   double x;
@@ -32,6 +35,15 @@ struct Point {
 };
 
 int xp, yp;
+
+int vali = 165;
+
+void print(int t){
+  oled.clear();
+  oled.home();
+  oled.print(t);
+  oled.update();
+}
 
 void up() {
   planner.stop();
@@ -44,8 +56,8 @@ void up() {
 
 void down() {
   planner.stop();
-  z.setTargetDeg(180);
-  while (abs(z.getCurrentDeg() - 180) > 1) {
+  z.setTargetDeg(vali);
+  while (abs(z.getCurrentDeg() - vali) > 1) {
     handler();
   }
   planner.start();
@@ -81,12 +93,15 @@ bool add(double x, double y, int s = speed) {
 }
 
 void wait() {
+  print(0);
   while (planner.getStatus() == 1) {
     handler();
   }
+  print(1);
   while (planner.getStatus() == 2) {
     handler();
   }
+  print(2);
 }
 
 void move(double x, double y, int s = speed) {
@@ -189,6 +204,7 @@ void setup() {
     b.Button("Показания датчика линии", []() {
       while (true) {
         enc.tick();
+        print(line);
         if (enc.click()) {
           smenu.refresh();
           break;
@@ -197,6 +213,7 @@ void setup() {
       enc.reset();
     });
     b.Button("Калибровка линии", []() {
+      calib();
     });
     b.Button("Взять маркер", []() {
       up();
@@ -207,6 +224,7 @@ void setup() {
     b.Button("Опустить маркер", []() {
       down();
     });
+    b.ValueInt<int>("ValueInt", &vali, 0, 180, 5, DEC, "*", [](int vo) { down(); });
   });
 
   tmenu.onPrint([](const char* str, size_t len) {
@@ -259,7 +277,7 @@ void refresh() {
 }
 
 double cm_x(double n) {
-  return 10 * n * (3200.0 / (44.0 * M_PI));
+  return 10 * (n * 3200.0 / (44.0 * M_PI));
 }
 
 void reset_x() {
@@ -276,21 +294,18 @@ void set_speed_x(int s) {
   planner.setSpeed(2, s);
 }
 
-void stop_x() {
-  planner.setSpeed(0, 0);
-  planner.setSpeed(2, 0);
-}
-
-double go_line_x(int s) {
+double go_line_x(int s, double f = 1) {
   set_speed_x(s);
-  while (line > 500) {
+  while (line < 750) {
     handler();
   }
   long t = millis();
-  while (line < 500) {
-    handler();
+  if (f) {
+    while (line > 600) {
+      handler();
+    }
   }
-  stop_x();
+  stop();
   return millis() - t;
 }
 
@@ -311,25 +326,44 @@ void set_speed_y(int s) {
   planner.setSpeed(1, s);
 }
 
-void stop_y() {
-  planner.setSpeed(1, 0);
-}
-
-double go_line_y(int s) {
+double go_line_y(int s, bool f = 0) {
   set_speed_y(s);
-  while (line > 500) {
+  while (line < 750) {
     handler();
   }
   long t = millis();
-  while (line < 500) {
-    handler();
+  if (f) {
+    while (line > 500) {
+      handler();
+    }
   }
-  stop_y();
+  stop();
   return millis() - t;
 }
 
 void reset() {
+  xp = 0;
+  yp = 0;
   planner.reset();
+}
+
+void stop() {
+  planner.brake();
+}
+
+void calib(){
+  int sp = 5000;
+  long t = millis();
+  go_line_x(sp, 1);
+  double time = (millis() - t) / 1000.0;
+  start_x = -cm_x(sp * time) / 100000 + 6;
+  print(start_x);
+  go_line_y(-20000, 0);
+  stop();
+  reset();
+  move(-6, 0.5);
+  reset();
+  move(start_x, 0);
 }
 
 void handler() {
@@ -343,15 +377,26 @@ void handler() {
     if (settings == 0) menu.down();
     if (settings == 1) smenu.down();
     if (settings == 2) tmenu.down();
-  } else if (enc.left()) {
+  }
+  else if (enc.rightH()) {
+    if (settings == 0) menu.right();
+    if (settings == 1) smenu.right();
+    if (settings == 2) tmenu.right();
+  }
+  else if (enc.left()) {
     if (settings == 0) menu.up();
     if (settings == 1) smenu.up();
     if (settings == 2) tmenu.up();
+  } else if (enc.leftH()) {
+    if (settings == 0) menu.left();
+    if (settings == 1) smenu.left();
+    if (settings == 2) tmenu.left();
   } else if (enc.hasClicks(1)) {
     if (settings == 0) menu.set();
     if (settings == 1) smenu.set();
     if (settings == 2) tmenu.set();
-  } else if (enc.hasClicks(2)) {
+  }
+   else if (enc.hasClicks(2)) {
     if (settings == 0) settings = 1;
     else if (settings == 1) settings = 0;
     else if (settings == 2) settings = 1;
@@ -364,7 +409,7 @@ void handler() {
   }
 }
 
-void draw_line(double x0, double y0, double x, double y, bool f = 0) {
+void draw_line(double x0, double y0, double x, double y, bool f = 1) {
   if (!f) {
     down();
   } else {
@@ -417,22 +462,45 @@ void _draw_path_internal(Point* pts, int size, bool zam) {
   up();
 }
 
+void draw_point(double x, double y) {
+  up();
+  move(x, y);
+  down();
+  up();
+}
+
+void draw_rect(double x0, double y0, double x1, double y1, int s = speed) {
+  draw_line(x0, y0, x1, y0);
+  draw_line(x1, y0, x1, y1, 0);
+  draw_line(x1, y1, x0, y1, 0);
+  draw_line(x0, y1, x0, y0, 0);
+  up();
+}
+
 void loop() {
   OS.tick();
 }
 
 void f_1() {
-  Point path[4] = { { 0, 0 }, { 0, 10, 26000 }, { 10, 10 }, { 10, 0, 26000 } };
-  draw_path(path, 1);
+  Point lom1[] = { { 5.000, 3.500, 5000 }, { 15.000, 3.500, 5000 }, { 15.000, 13.500, 20000 }, { 5.000, 13.500, 5000 }, { 5.000, 3.500, 20000 } };
+  draw_path(lom1, 0);
+  draw_line(5.000, 3.500, 15.000, 13.500, 0);
+  draw_line(5.000, 13.500, 15.000, 3.500);
+  draw_circle(10.000, 8.500, 5.000);
+  draw_circle(10.000, 8.500, 7.071);
 }
 
 void f_2() {
-  Point path[3] = { { 15, 0 }, { 15, 15, 26000 }, { 30, 15 } };
-  draw_path(path, 0);
-  move(0, 0, 15000);
+up();
+move(15, 0);
+Point lom1[] = { { 1.000, 1.000, 10000 }, { 1.000, 16.000, 26000 }, { 16.000, 16.000, 1500 } };
+draw_path(lom1, 0);
+move(start_x, 0, 20000);
 }
 
 void f_3() {
+Point poly1[] = { { 10.000, 11.500, 5000}, { 12.600, 7.000, 5000}, { 7.400, 7.000, 5000}, { 10.000, 11.500, 5000} };
+draw_path(poly1, 0);
 }
 
 void f_4() {
